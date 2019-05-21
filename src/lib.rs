@@ -49,62 +49,70 @@ impl Hub {
         }
     }
 
-    pub fn register(&mut self, code: usize, handler: fn(Msg)) -> Sender<Msg>{
+    pub fn register(&mut self, code: usize, handler: fn(Msg)) -> Option<Sender<Msg>>{
         let (s, r) = channel::<Msg>();
         //self.receivers.insert(0, r);
         let mut new_code: bool = false;
 
-        match self.registry.write() {
-            Ok(mut write) => {
-                match write.get_mut(&code) {
-                    Some(mut handlers) => {
-                        handlers.insert(0, handler);
-                    },
-                    None => {
-                        new_code = true;
-                    }
-                }
-            },
-            Err(err) => {}
-        }
-
-        if new_code {
-            let mut handlers: Vec<fn(Msg)> = vec!();
-            handlers.insert(0, handler);
-            self.registry.write().unwrap().insert(code, handlers);
-        }
-
-        let registry = self.registry.clone();
-        &self.workers.execute(move|| {
-            loop{
-                match r.recv() {
-                    Ok(msg) => {
-                        //println!("receive {0}",  msg.code);
-                        match registry.read().unwrap().get(&msg.code) {
-
-                            Some(listeners) => {
-                                for l in listeners {
-                                    let l0 = l.clone();
-                                    let msg0 = msg.clone();
-                                    thread::spawn(move||{
-                                        l0(msg0);
-                                    });
-                                }
-                                //println!("listeners {0}", listeners.len());
-                            },
-                            None => {
-                                println!("hub: unknown code {0}", msg.code);
-                            }
+        if code != 0 {
+            match self.registry.write() {
+                Ok(mut write) => {
+                    match write.get_mut(&code) {
+                        Some(mut handlers) => {
+                            handlers.insert(0, handler);
+                        },
+                        None => {
+                            new_code = true;
                         }
-                    },
-                    Err(err) => {}
-                };
-                //thread::sleep(Duration::from_millis(1));
+                    }
+                },
+                Err(err) => {}
             }
-        });
 
-        s
+            if new_code {
+                let mut handlers: Vec<fn(Msg)> = vec!();
+                handlers.insert(0, handler);
+                self.registry.write().unwrap().insert(code, handlers);
+            }
+
+            let registry = self.registry.clone();
+            &self.workers.execute(move|| {
+                loop{
+                    match r.recv() {
+                        Ok(msg) => {
+                            println!("receive code {0} len {1}",  msg.code, &msg.data.len());
+                            if &msg.code == &0usize {
+                                return;
+                            }
+                            match registry.read().unwrap().get(&msg.code) {
+                                Some(listeners) => {
+                                    for l in listeners {
+                                        let l0 = l.clone();
+                                        let msg0 = msg.clone();
+                                        thread::spawn(move||{
+                                            l0(msg0);
+                                        });
+                                    }
+                                    //println!("listeners {0}", listeners.len());
+                                },
+                                None => {
+                                    println!("hub: unknown code {0}", msg.code);
+                                }
+                            }
+                        },
+                        Err(err) => {
+                            return;
+                        }
+                    };
+                    //thread::sleep(Duration::from_millis(1));
+                }
+            });
+            Some(s)
+        } else {
+            None
+        }
     }
+
     pub fn echo(&self){
         println!("hub");
         match self.registry.read() {
@@ -117,5 +125,9 @@ impl Hub {
 
             }
         }
+    }
+
+    pub fn run(&self){
+        &self.workers.join();
     }
 }
